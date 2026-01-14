@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?><metadata>
+    <idinfo>
+        <citation>
+            <citeinfo>
+                <title>Map</title>
+            </citeinfo>
+        </citation>
+        <descript>
+            <abstract/>
+            <purpose>US County data including abbreviation, FIPS, population, area, centroid.</purpose>
+        </descript>
+        <keywords>
+            <theme>
+                <themekt>None</themekt>
+                <themekey>us</themekey>
+                <themekey>county</themekey>
+                <themekey>centroid</themekey>
+                <themekey>fips</themekey>
+            </theme>
+        </keywords>
+        <accconst>None</accconst>
+        <useconst/>
+        <datacred/>
+    </idinfo>
+    <metainfo>
+        <metstdn>FGDC Content Standard for Digital Geospatial Metadata</metstdn>
+        <metstdv>FGDC-STD-001-1998</metstdv>
+        <mettc>local time</mettc>
+    </metainfo>
+</metadata>

@@ -1,0 +1,176 @@
+{
+  "files": {
+    ".streamlit/config.toml": {
+      "bytes": 172,
+      "sha256": "efa8dc2690e22318611adfbb0104b3cccf07e9f14ffbb71563c6c26fd3f1ed49"
+    },
+    ".streamlit/secrets.toml": {
+      "bytes": 59,
+      "sha256": "5e0a4c93d809e577a60d1efd66bd0723d9c3faac39da628be2749b3073eddb26"
+    },
+    "Dockerfile": {
+      "bytes": 254,
+      "sha256": "76461ae5c8f1ff7779fa5bd07113f52ba91d58baa58f74759449a540cd3f235f"
+    },
+    "__init__.py": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "acs/__init__.py": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "acs/acs.py": {
+      "bytes": 2590,
+      "sha256": "3931b0ae70aeb7b3f32e6e7780dbc44e5f27f825525145407972ef973ed4db19"
+    },
+    "acs/enrich.py": {
+      "bytes": 2669,
+      "sha256": "22276912df17e555f5a894e5470c51489048023972c6579fadc80f9549745438"
+    },
+    "acs/join.py": {
+      "bytes": 2745,
+      "sha256": "bbd8935056ce88e5684e9ccafdcc14c34ec85ddde875431b3b0083c4cebf0f12"
+    },
+    "acs/schema.py": {
+      "bytes": 515,
+      "sha256": "f8599b8fd6d073047dfe588763fe2d7b5ff815134518da5faa7b7720eff68209"
+    },
+    "app.py": {
+      "bytes": 4595,
+      "sha256": "6738a244f91bc9b9e482925ecfa06ffa5f7edc64ce0aac71a8fd387bd58f70a3"
+    },
+    "config.py": {
+      "bytes": 268,
+      "sha256": "9d9d767d403756ccc4c67e6483d46d5d14e90253147a967accd1b26b564b4f75"
+    },
+    "db/__init__.py": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "db/core.py": {
+      "bytes": 1852,
+      "sha256": "ccdb64e3f05008e853df1c88e91edefb620e4593890e6e9a66bcfe1d04a769cf"
+    },
+    "db/duckdb_conn.py": {
+      "bytes": 468,
+      "sha256": "8c96d7c29651227b6ed5cdb385350ac31b33ccfc8386aa765464690cca86bcf5"
+    },
+    "fraud/__init__.py": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "fraud/score.py": {
+      "bytes": 6678,
+      "sha256": "7f67dd275d9316aeb27740072f406642df0d1540b10a76ce9dfab1df31902c3a"
+    },
+    "fraud/scoring.py": {
+      "bytes": 1720,
+      "sha256": "83c506521d21e5284d2ac27e4dcc4adb3ee53d1e4f8b36536d9f632576732854"
+    },
+    "geo/__init__.py": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "geo/counties.py": {
+      "bytes": 1521,
+      "sha256": "8a4b8d0e02d57436a1a56d6c61e0b3dc812409d149d4dfc5236d9cbfb52662f3"
+    },
+    "geo/loader.py": {
+      "bytes": 3019,
+      "sha256": "a268d98d3e1c896db6e70be1f4437f032926c27e67b3ebf86187685208f1c759"
+    },
+    "health/__init__.py": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "health/panel.py": {
+      "bytes": 1416,
+      "sha256": "0ecd431a13c54d98c82882b33f9f02019833367a1c56b4370d65688d602137ed"
+    },
+    "map/__init__.py": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "map/deck.py": {
+      "bytes": 3027,
+      "sha256": "58444f51d133e5e58b2ed5a34c57e5ede6d9ea9f94ba14a6e3724e7dfae67c97"
+    },
+    "map/folium_map.py": {
+      "bytes": 2884,
+      "sha256": "8e6d6187b0c52cb30ce23d97c75a3ad0b673fd83e497fbc2cd0861352dcccee4"
+    },
+    "map/render.py": {
+      "bytes": 4784,
+      "sha256": "2792a69a6114a68fc46b61594161a5582055649af1da72ff36453c208c989088"
+    },
+    "ppp/__init__.py": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "ppp/ingest.py": {
+      "bytes": 9640,
+      "sha256": "976d492549d166902136351c48ae35dbae52a4e3acc413f1a5e41ab8660d57b1"
+    },
+    "ppp/normalize.py": {
+      "bytes": 2149,
+      "sha256": "8449e0a64bd3e9cd2f3886d0d8cdc4b68e45a232ac502d3097fa3e667b63ab24"
+    },
+    "ppp/schema.py": {
+      "bytes": 903,
+      "sha256": "1e2476af6cd0eadec534f8f584dad3e1d4b1574ba6a6dc7fa49861fb1fc839c5"
+    },
+    "reports/__init__.py": {
+      "bytes": 19,
+      "sha256": "0cd0e40c1a27c54fa73396b963ba6e062c1b62fb1ba9f3d60cc935d8c251bc25"
+    },
+    "reports/pdf.py": {
+      "bytes": 3115,
+      "sha256": "7e20d0afd6c095bbcf1261e242d05332131d7c98092cfdf9d58256e682e962ef"
+    },
+    "reports/pdf_report.py": {
+      "bytes": 4640,
+      "sha256": "161faabc2da486dd2cde7dc07120262b3825a6b0523f006f7646000796689638"
+    },
+    "ui/__init__.py": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "ui/status.py": {
+      "bytes": 1090,
+      "sha256": "7a8c528f464691a46be1f7de8fa738432814fc309b2f1c0dfc2317cb08ba90ba"
+    },
+    "utils/__init__.py": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "utils/bootstrap_county_ref.py": {
+      "bytes": 1305,
+      "sha256": "8d95cf9991f2902face6d4474365703daa7319946f38960f793e904f729501cf"
+    },
+    "utils/encoding.py": {
+      "bytes": 1141,
+      "sha256": "1d30d62f883df9951610ab65573863d3a2245511e45b3b97c0d02507658d2950"
+    },
+    "utils/generate_county_2025.py": {
+      "bytes": 1930,
+      "sha256": "145bd702b25949205a000a52b33ec439ba91ae3216769aa1a3c80f78542f8bd3"
+    },
+    "utils/normalize.py": {
+      "bytes": 1099,
+      "sha256": "15c8d1b4a7e1b6bab4c5952d16efd3005c747b4d74cad921769b49d9bc835237"
+    },
+    "utils/pdf.py": {
+      "bytes": 1670,
+      "sha256": "0ecf4d475e7f41530ab2aae83a580458297f6b1d55cce64949d29c508c928b46"
+    },
+    "utils/strings.py": {
+      "bytes": 466,
+      "sha256": "03331d2561d7aa548d064aa81c0daf8aa463d5774313981a12cf4881f6a060e0"
+    },
+    "utils/time.py": {
+      "bytes": 155,
+      "sha256": "d967fa38abd4fc379b24d5a24d0ba002959dd5207237f9df7bee8801e85e5ab6"
+    }
+  }
+}
