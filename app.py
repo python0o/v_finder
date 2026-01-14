@@ -11,6 +11,8 @@ Guarantees:
 - No walrus operators
 - Single cached DuckDB connection
 """
+from __future__ import annotations
+
 import os
 import streamlit as st
 
@@ -46,7 +48,6 @@ def ensure_database():
 # Call this before anything else
 ensure_database()
 
-from __future__ import annotations
 
 import duckdb
 import streamlit as st
