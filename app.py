@@ -11,6 +11,40 @@ Guarantees:
 - No walrus operators
 - Single cached DuckDB connection
 """
+import os
+import streamlit as st
+
+DB_PATH = "data/db/v_finder.duckdb"
+
+def ensure_database():
+    if os.path.exists(DB_PATH):
+        return True
+
+    st.error("Database not found.")
+    st.info(
+        "Upload the V_FINDER DuckDB file to initialize the application.\n\n"
+        "This is a one-time setup step."
+    )
+
+    uploaded = st.file_uploader(
+        "Upload v_finder.duckdb",
+        type=["duckdb"],
+        accept_multiple_files=False
+    )
+
+    if uploaded is not None:
+        os.makedirs("data/db", exist_ok=True)
+        with open(DB_PATH, "wb") as f:
+            f.write(uploaded.read())
+
+        st.success("Database uploaded successfully.")
+        st.warning("Please reboot the app using the menu in the top right.")
+        st.stop()
+
+    st.stop()
+
+# Call this before anything else
+ensure_database()
 
 from __future__ import annotations
 
