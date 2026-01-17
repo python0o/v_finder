@@ -31,12 +31,27 @@ except Exception:
 
 
 def _is_streamlit_cloud() -> bool:
-    """Heuristic detection for Streamlit Community Cloud."""
-    return bool(
-        st.secrets.get("STREAMLIT_CLOUD", False)
-        or Path("/mount/src").exists()
-        or Path("/home/sandbox").exists()
-    )
+    """
+    Heuristic detection for Streamlit Community Cloud.
+
+    IMPORTANT:
+    - st.secrets raises if no secrets.toml exists
+    - so secrets access must be wrapped
+    """
+    # Safe secrets access
+    try:
+        if bool(st.secrets["STREAMLIT_CLOUD"]):
+            return True
+    except Exception:
+        pass
+
+    # Filesystem heuristics (safe everywhere)
+    if Path("/mount/src").exists():
+        return True
+    if Path("/home/sandbox").exists():
+        return True
+
+    return False
 
 
 def _table_exists(con: duckdb.DuckDBPyConnection, table: str, schema: str | None = None) -> bool:
