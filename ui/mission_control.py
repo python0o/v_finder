@@ -30,8 +30,8 @@ def _table_exists(con: duckdb.DuckDBPyConnection, name: str) -> bool:
     try:
         return bool(
             con.execute(
-                "SELECT COUNT(*) FROM information_schema.tables WHERE table_name = ?",
-                [name.lower()],
+                "SELECT COUNT(*) FROM information_schema.tables WHERE lower(table_name) = lower(?)",
+                [name],
             ).fetchone()[0]
         )
     except Exception:
@@ -95,10 +95,17 @@ def _load_ops_frame(con: duckdb.DuckDBPyConnection, use_peer_norm: bool) -> pd.D
 
     # robust defaults
     if "outlier_tier" not in df.columns:
-        df["outlier_tier"] = df.get("outlier_flag", False).map(lambda x: "SEVERE" if x else "NORMAL")
+        # outlier_flag may not exist depending on upstream loaders; default to NORMAL safely
+        if "outlier_flag" in df.columns:
+            df["outlier_tier"] = df["outlier_flag"].astype(bool).map(lambda x: "SEVERE" if x else "NORMAL")
+        else:
+            df["outlier_tier"] = "NORMAL"
     if "outlier_score" not in df.columns:
         # if peer-normalized engine doesn’t output a score, treat flag as 1
-        df["outlier_score"] = df.get("outlier_flag", False).astype(int)
+        if "outlier_flag" in df.columns:
+            df["outlier_score"] = df["outlier_flag"].astype(bool).astype(int)
+        else:
+            df["outlier_score"] = 0
 
     if "risk_tier" not in df.columns:
         df["risk_tier"] = "UNKNOWN"
@@ -344,7 +351,7 @@ def render_mission_control_page(con: duckdb.DuckDBPyConnection) -> None:
         inplace=True,
     )
 
-    st.dataframe(triage, use_container_width=True)
+    st.dataframe(triage, width='stretch')
 
     st.download_button(
         "Download triage table (CSV)",
