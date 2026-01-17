@@ -11,8 +11,7 @@ import streamlit as st
 
 def load_county_scores(con: duckdb.DuckDBPyConnection) -> pd.DataFrame:
     """
-    Load county-level risk scores.
-    Schema-qualified and aligned with V1 schema.
+    Load county-level analytics scores (V1 schema).
     """
     sql = """
     SELECT
@@ -29,15 +28,13 @@ def load_county_scores(con: duckdb.DuckDBPyConnection) -> pd.DataFrame:
 
 def load_county_ref(con: duckdb.DuckDBPyConnection) -> pd.DataFrame:
     """
-    Load county reference table.
+    Load county reference metadata (V1 schema).
     """
     sql = """
     SELECT
         GEOID,
         NAME,
-        STUSPS,
-        lat,
-        lon
+        STUSPS
     FROM core.county_ref
     """
     return con.execute(sql).fetchdf()
@@ -56,12 +53,11 @@ def load_outliers(
     Build outlier frame for Mission Control.
 
     V1 behavior:
-    - risk_score is the primary ranking metric
-    - hidden_signal_score is auxiliary
-    - PPP metrics are already aggregated
+    - Primary ranking: risk_score
+    - Secondary signal: hidden_signal_score
+    - PPP metrics already aggregated (counts/totals)
     """
 
-    # --- Load required analytics tables ---
     try:
         df_scores = load_county_scores(con)
         df_ref = load_county_ref(con)
@@ -72,18 +68,13 @@ def load_outliers(
     if df_scores.empty or df_ref.empty:
         return pd.DataFrame()
 
-    # --- Merge scores with county metadata ---
+    # Merge analytics with county metadata
     df = df_scores.merge(df_ref, on="GEOID", how="left")
 
-    # --- Select ranking column (V1: always risk_score) ---
-    score_col = "risk_score"
+    # Rank strictly by risk_score (V1 canonical)
+    df = df[df["risk_score"].notna()].copy()
+    df = df.sort_values("risk_score", ascending=False)
 
-    df = df[df[score_col].notna()].copy()
-
-    # --- Sort descending risk ---
-    df = df.sort_values(score_col, ascending=False)
-
-    # --- Trim ---
     if top_n:
         df = df.head(top_n)
 
