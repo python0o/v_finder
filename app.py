@@ -1,51 +1,26 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
-from typing import Tuple
-
 import duckdb
 import streamlit as st
 
-from ui.mission_control import render_mission_control_page
-from ui.county_profile import render_county_profile_page
-from ui.lender_profile import render_lender_profile_page
-from ui.network_graph import render_network_graph
-from ui.compare_counties import render_compare_counties_page
-from ui.fraud_simulator import render_fraud_simulator_page
-from map.deck import render_nationwide_map
-
-# Optional Dashboard page (some deployments referenced this)
-try:
-    from ui.dashboard import render_dashboard_page  # type: ignore
-    HAS_DASHBOARD = True
-except Exception:
-    render_dashboard_page = None  # type: ignore
-    HAS_DASHBOARD = False
-
-try:
-    from health.panel import render_health_panel
-    HAS_HEALTH_PANEL = True
-except Exception:
-    render_health_panel = None
-    HAS_HEALTH_PANEL = False
-
+# =============================================================================
+# Environment + Cloud Detection (SAFE)
+# =============================================================================
 
 def _is_streamlit_cloud() -> bool:
     """
-    Heuristic detection for Streamlit Community Cloud.
-
-    IMPORTANT:
-    - st.secrets raises if no secrets.toml exists
-    - so secrets access must be wrapped
+    Detect Streamlit Community Cloud safely.
+    st.secrets throws if no secrets.toml exists, so wrap everything.
     """
-    # Safe secrets access
     try:
-        if bool(st.secrets["STREAMLIT_CLOUD"]):
+        if bool(st.secrets.get("STREAMLIT_CLOUD", False)):
             return True
     except Exception:
         pass
 
-    # Filesystem heuristics (safe everywhere)
+    # Filesystem heuristics used by Streamlit Cloud
     if Path("/mount/src").exists():
         return True
     if Path("/home/sandbox").exists():
@@ -54,245 +29,184 @@ def _is_streamlit_cloud() -> bool:
     return False
 
 
-def _table_exists(con: duckdb.DuckDBPyConnection, table: str, schema: str | None = None) -> bool:
-    """Return True if a table/view exists (case-insensitive)."""
-    if schema:
-        q = """
-        SELECT COUNT(*)
-        FROM information_schema.tables
-        WHERE lower(table_schema) = lower(?) AND lower(table_name) = lower(?)
-        """
-        return bool(con.execute(q, [schema, table]).fetchone()[0])
-    q = """
-    SELECT COUNT(*)
-    FROM information_schema.tables
-    WHERE lower(table_name) = lower(?)
+# =============================================================================
+# DuckDB Bootstrap
+# =============================================================================
+
+def _open_duckdb() -> duckdb.DuckDBPyConnection:
     """
-    return bool(con.execute(q, [table]).fetchone()[0])
+    Open DuckDB in read-only mode for analytics.
+    """
+    # Default DB path (repo-relative)
+    default_db = Path("data/db/v_finder.duckdb")
 
+    # Allow override via env var (Cloud-safe)
+    db_path = Path(os.environ.get("V_FINDER_DB", default_db))
 
-def _db_paths() -> Tuple[Path, Path, Path]:
-    """Return (monolithic, core, analytics) paths."""
-    base = Path("data") / "db"
-    return (base / "v_finder.duckdb", base / "core.duckdb", base / "analytics.duckdb")
+    if not db_path.exists():
+        st.error(f"DuckDB file not found: {db_path}")
+        st.stop()
 
-
-def get_connection(read_only: bool = False) -> duckdb.DuckDBPyConnection:
-    """Open DuckDB connection and ATTACH split DBs if present."""
-    mono, core, analytics = _db_paths()
-    mono.parent.mkdir(parents=True, exist_ok=True)
-
-    if mono.exists():
-        con = duckdb.connect(str(mono), read_only=read_only)
-        # If split DBs also exist, attach them (hybrid compatible)
-        if core.exists():
-            con.execute(f"ATTACH '{core.as_posix()}' AS core")
-        if analytics.exists():
-            con.execute(f"ATTACH '{analytics.as_posix()}' AS analytics")
-        return con
-
-    # No monolithic DB: create in-memory shell and attach available DBs
-    con = duckdb.connect(":memory:")
-    if core.exists():
-        con.execute(f"ATTACH '{core.as_posix()}' AS core")
-    if analytics.exists():
-        con.execute(f"ATTACH '{analytics.as_posix()}' AS analytics")
-    return con
+    return duckdb.connect(str(db_path), read_only=True)
 
 
 def _ensure_compat_views(con: duckdb.DuckDBPyConnection) -> None:
-    """Create main-level compatibility views so unqualified queries work in Local + Cloud.
-
-    Does NOT change schemas or tables. Views only.
-    This prevents failures like:
-      - Table county_scores does not exist (but analytics.county_scores does)
-      - Table county_ref does not exist (but core.county_ref does)
     """
-    # Candidate mappings (target view -> (schema, table) preference order)
-    mapping = {
-        "county_scores": [("analytics", "county_scores"), ("main", "county_scores")],
-        "county_agg": [("analytics", "county_agg"), ("main", "county_agg")],
-        "county_lender_signals": [("analytics", "county_lender_signals"), ("main", "county_lender_signals")],
-        "lender_profiles": [("analytics", "lender_profiles"), ("main", "lender_profiles")],
-        "acs_county": [("analytics", "acs_county"), ("core", "acs_county"), ("main", "acs_county")],
-        "county_ref": [("core", "county_ref"), ("analytics", "county_ref"), ("main", "county_ref")],
+    Ensure unqualified compatibility views exist for hybrid deployments.
+
+    This allows UI code to reference:
+      - county_scores
+      - lender_profiles
+      - county_lender_signals
+      - county_ref
+
+    even when the physical tables live in:
+      - analytics.*
+      - core.*
+    """
+
+    def has_table(schema: str, name: str) -> bool:
+        try:
+            return bool(
+                con.execute(
+                    """
+                    SELECT COUNT(*)
+                    FROM information_schema.tables
+                    WHERE lower(table_schema) = lower(?)
+                      AND lower(table_name) = lower(?)
+                    """,
+                    [schema, name],
+                ).fetchone()[0]
+            )
+        except Exception:
+            return False
+
+    def has_any(name: str) -> bool:
+        try:
+            return bool(
+                con.execute(
+                    """
+                    SELECT COUNT(*)
+                    FROM information_schema.tables
+                    WHERE lower(table_name) = lower(?)
+                    """,
+                    [name],
+                ).fetchone()[0]
+            )
+        except Exception:
+            return False
+
+    mappings = [
+        ("county_scores", "analytics"),
+        ("lender_profiles", "analytics"),
+        ("county_lender_signals", "analytics"),
+        ("county_ref", "core"),
+    ]
+
+    for table, schema in mappings:
+        # If already accessible unqualified, do nothing
+        if has_any(table):
+            continue
+
+        # If schema-qualified table exists, create compat view
+        if has_table(schema, table):
+            try:
+                con.execute(
+                    f"CREATE VIEW {table} AS SELECT * FROM {schema}.{table}"
+                )
+            except Exception:
+                # View may already exist or be created concurrently; ignore
+                pass
+
+
+# =============================================================================
+# UI Imports (AFTER BOOTSTRAP)
+# =============================================================================
+
+def _import_pages():
+    """
+    Import UI modules only after DuckDB + compat views are ready.
+    """
+    from ui.dashboard import render_dashboard_page
+    from ui.mission_control import render_mission_control_page
+    from ui.outliers import load_outliers  # noqa: F401 (used indirectly)
+    from ui.lender_profile import render_lender_profile_page
+    from ui.network_graph import render_network_graph
+    from map.deck import render_nationwide_map
+    from health.panel import render_health_panel
+
+    return {
+        "Dashboard": render_dashboard_page,
+        "Mission Control": render_mission_control_page,
+        "Nationwide Map": render_nationwide_map,
+        "Lender Profile": render_lender_profile_page,
+        "Lender Network": render_network_graph,
+        "System Health": render_health_panel,
     }
 
-    # If view already exists in main, do nothing
-    for view_name, candidates in mapping.items():
-        if _table_exists(con, view_name, schema="main"):
-            continue
 
-        # Find first existing candidate
-        src = None
-        for sch, tbl in candidates:
-            if _table_exists(con, tbl, schema=sch):
-                src = (sch, tbl)
-                break
-
-        if not src:
-            continue
-
-        sch, tbl = src
-        try:
-            con.execute(f"CREATE VIEW {view_name} AS SELECT * FROM {sch}.{tbl}")
-        except Exception:
-            # If view creation fails for any reason, continue without breaking app launch.
-            pass
-
-
-def _attach_ppp_shard_for_state(con: duckdb.DuckDBPyConnection, state: str) -> Tuple[bool, str]:
-    """Attach per-state PPP shard DB if present.
-
-    Attaches as schema name 'ppp'.
-    Expected file pattern: data/db/ppp/ppp_<ST>.duckdb
-    """
-    st_code = (state or "").upper().strip()
-    if len(st_code) != 2:
-        return False, "Select a 2-letter state to attach PPP shard."
-
-    shard = Path("data") / "db" / "ppp" / f"ppp_{st_code}.duckdb"
-    if not shard.exists():
-        return False, f"PPP shard not found for {st_code} (expected {shard})."
-
-    # Detach first if already attached
-    try:
-        con.execute("DETACH ppp")
-    except Exception:
-        pass
-
-    con.execute(f"ATTACH '{shard.as_posix()}' AS ppp")
-    return True, f"PPP shard attached: {shard.name}"
-
+# =============================================================================
+# Status Badge
+# =============================================================================
 
 def _render_status_badge(con: duckdb.DuckDBPyConnection) -> None:
     cloud = _is_streamlit_cloud()
-    mode = "Cloud" if cloud else "Local"
 
-    mono, core, analytics = _db_paths()
-    split = (core.exists() or analytics.exists()) and not mono.exists()
-    layout = "Split DB" if split else "Monolithic DB"
+    cols = st.columns(4)
+    cols[0].metric("Mode", "Cloud" if cloud else "Local")
+    cols[1].metric("DuckDB", "Connected")
+    cols[2].metric("PPP Source", "Capella")
+    cols[3].metric("Architecture", "Hybrid")
 
-    ppp_attached = bool(st.session_state.get("vf_ppp_attached", False))
-
-    left, right = st.columns([0.65, 0.35])
-    with left:
-        st.caption(f"Mode: {mode} | Storage: {layout}")
-    with right:
-        if ppp_attached:
-            st.success("PPP: ATTACHED")
-        else:
-            st.info("PPP: OFF")
+    st.markdown("---")
 
 
-def _init_state() -> None:
-    st.session_state.setdefault("vf_state", "")
-    st.session_state.setdefault("vf_ppp_attached", False)
-    st.session_state.setdefault("vf_ppp_auto_attach", True)
-
-
-def _available_states(con: duckdb.DuckDBPyConnection) -> list[str]:
-    # After compat views, county_scores should exist unqualified if present anywhere
-    try:
-        if _table_exists(con, "county_scores"):
-            df = con.execute("SELECT DISTINCT STUSPS FROM county_scores ORDER BY STUSPS").fetchdf()
-            return [str(x) for x in df["STUSPS"].dropna().tolist()]
-    except Exception:
-        pass
-    return []
-
-
-def _sidebar_nav(con: duckdb.DuckDBPyConnection) -> str:
-    st.sidebar.title("V_FINDER")
-
-    states = _available_states(con)
-    default_ix = 0
-    if states and st.session_state.get("vf_state") in states:
-        default_ix = states.index(st.session_state["vf_state"])
-
-    if states:
-        st.session_state["vf_state"] = st.sidebar.selectbox(
-            "Active state",
-            states,
-            index=default_ix,
-            help="Used for default fast views and optional PPP shard attachment.",
-        )
-    else:
-        st.session_state["vf_state"] = st.sidebar.text_input(
-            "Active state (2-letter)",
-            value=st.session_state.get("vf_state", ""),
-        )
-
-    st.session_state["vf_ppp_auto_attach"] = st.sidebar.checkbox(
-        "Auto-attach PPP shard (if present)",
-        value=bool(st.session_state.get("vf_ppp_auto_attach", True)),
-    )
-
-    pages = []
-    if HAS_DASHBOARD:
-        pages.append("Dashboard")
-    pages += [
-        "Mission Control",
-        "Nationwide Map",
-        "County Profile",
-        "Lender Profile",
-        "Lender Network",
-        "Compare Counties",
-        "Fraud Simulator",
-    ]
-    if HAS_HEALTH_PANEL:
-        pages.append("Health Panel")
-
-    return st.sidebar.radio("Navigate", pages, index=0)
-
+# =============================================================================
+# Main App
+# =============================================================================
 
 def main() -> None:
-    st.set_page_config(page_title="V_FINDER", layout="wide", initial_sidebar_state="expanded")
-    _init_state()
+    st.set_page_config(
+        page_title="V_FINDER",
+        layout="wide",
+        initial_sidebar_state="expanded",
+    )
 
-    con = get_connection(read_only=False)
+    # -------------------------------------------------------------------------
+    # Open DB + bootstrap
+    # -------------------------------------------------------------------------
+    con = _open_duckdb()
+    _ensure_compat_views(con)
+
+    # -------------------------------------------------------------------------
+    # Header
+    # -------------------------------------------------------------------------
+    st.title("V_FINDER")
+    st.caption("PPP + ACS County-Level Fraud & Risk Analytics (Hybrid Architecture)")
+    _render_status_badge(con)
+
+    # -------------------------------------------------------------------------
+    # Navigation
+    # -------------------------------------------------------------------------
+    pages = _import_pages()
+
+    with st.sidebar:
+        st.subheader("Navigation")
+        page = st.radio("Go to", list(pages.keys()))
+
+    # -------------------------------------------------------------------------
+    # Render selected page
+    # -------------------------------------------------------------------------
     try:
-        # Ensure unqualified queries work regardless of split/mono schema layout
-        _ensure_compat_views(con)
+        pages[page](con)
+    except Exception as e:
+        st.error("Unhandled application error")
+        st.exception(e)
 
-        page = _sidebar_nav(con)
 
-        # PPP shard attach (optional)
-        if st.session_state.get("vf_ppp_auto_attach", True):
-            ok, _msg = _attach_ppp_shard_for_state(con, st.session_state.get("vf_state", ""))
-            st.session_state["vf_ppp_attached"] = bool(ok)
-        else:
-            st.session_state["vf_ppp_attached"] = False
-
-        _render_status_badge(con)
-
-        if page == "Dashboard" and HAS_DASHBOARD:
-            render_dashboard_page(con)  # type: ignore[misc]
-        elif page == "Mission Control":
-            render_mission_control_page(con)
-        elif page == "Nationwide Map":
-            render_nationwide_map(con, default_state=st.session_state.get("vf_state", ""))
-        elif page == "County Profile":
-            render_county_profile_page(con)
-        elif page == "Lender Profile":
-            render_lender_profile_page(con)
-        elif page == "Lender Network":
-            render_network_graph(con)
-        elif page == "Compare Counties":
-            render_compare_counties_page(con)
-        elif page == "Fraud Simulator":
-            render_fraud_simulator_page(con)
-        elif page == "Health Panel" and HAS_HEALTH_PANEL:
-            render_health_panel(con)  # type: ignore[misc]
-        else:
-            st.error("Unknown page.")
-
-    finally:
-        try:
-            con.close()
-        except Exception:
-            pass
-
+# =============================================================================
+# Entry Point
+# =============================================================================
 
 if __name__ == "__main__":
     main()
