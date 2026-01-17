@@ -8,10 +8,6 @@ Mission Control:
 - Filters and routing hub
 - No heavy PPP joins on first render
 - Streamlit-compatible rerun (st.rerun)
-
-Depends on:
-- county_scores (risk + PPP + demographics + hidden signal)
-- ui/outliers.py (load_outliers)
 """
 
 from __future__ import annotations
@@ -66,10 +62,7 @@ def _fmt_pct(x) -> str:
 # Loaders
 # ---------------------------------------------------------------------
 def _load_ops_frame(con: duckdb.DuckDBPyConnection, use_peer_norm: bool) -> pd.DataFrame:
-    """
-    Mission Control should be fast: pull interpreted outliers which already includes
-    county_scores fields (risk + PPP + demographics + hidden signal).
-    """
+    """Mission Control should be fast: pull interpreted outliers."""
     if not _table_exists(con, "county_scores"):
         return pd.DataFrame()
 
@@ -93,19 +86,20 @@ def _load_ops_frame(con: duckdb.DuckDBPyConnection, use_peer_norm: bool) -> pd.D
     else:
         df["label"] = df.get("GEOID", "").astype(str)
 
-    # robust defaults
+    # robust defaults (FIXED: no scalar .map)
     if "outlier_tier" not in df.columns:
-        # outlier_flag may not exist depending on upstream loaders; default to NORMAL safely
         if "outlier_flag" in df.columns:
-            df["outlier_tier"] = df["outlier_flag"].astype(bool).map(lambda x: "SEVERE" if x else "NORMAL")
+            df["outlier_tier"] = df["outlier_flag"].fillna(False).astype(bool).map(
+                lambda x: "SEVERE" if x else "NORMAL"
+            )
         else:
-            df["outlier_tier"] = "NORMAL"
+            df["outlier_tier"] = pd.Series("NORMAL", index=df.index)
+
     if "outlier_score" not in df.columns:
-        # if peer-normalized engine doesn’t output a score, treat flag as 1
         if "outlier_flag" in df.columns:
-            df["outlier_score"] = df["outlier_flag"].astype(bool).astype(int)
+            df["outlier_score"] = df["outlier_flag"].fillna(False).astype(bool).astype(int)
         else:
-            df["outlier_score"] = 0
+            df["outlier_score"] = pd.Series(0, index=df.index)
 
     if "risk_tier" not in df.columns:
         df["risk_tier"] = "UNKNOWN"
@@ -123,16 +117,10 @@ def render_mission_control_page(con: duckdb.DuckDBPyConnection) -> None:
     st.title("Mission Control")
     st.caption("Operational triage for county risk, peer-normalized outliers, and investigative routing.")
 
-    # -----------------------------------------------------------------
-    # Guard rails
-    # -----------------------------------------------------------------
     if not _table_exists(con, "county_scores"):
         st.error("Missing table: county_scores")
         return
 
-    # -----------------------------------------------------------------
-    # Peer normalization toggle
-    # -----------------------------------------------------------------
     use_peer_norm = st.toggle(
         "Use Demographic Peer Normalization",
         value=True,
@@ -146,9 +134,6 @@ def render_mission_control_page(con: duckdb.DuckDBPyConnection) -> None:
 
     st.caption("Peer normalization is ON." if use_peer_norm else "Peer normalization is OFF (global comparisons).")
 
-    # -----------------------------------------------------------------
-    # Filters
-    # -----------------------------------------------------------------
     st.markdown("### Filters")
 
     f1, f2, f3, f4 = st.columns([1, 1, 1, 1])
@@ -180,7 +165,6 @@ def render_mission_control_page(con: duckdb.DuckDBPyConnection) -> None:
     if q.strip() and "NAME" in view.columns:
         view = view[view["NAME"].str.contains(q.strip(), case=False, na=False)]
 
-    # Default sorting: most actionable first
     sort_mode = st.selectbox(
         "Sort",
         [
@@ -201,7 +185,11 @@ def render_mission_control_page(con: duckdb.DuckDBPyConnection) -> None:
         elif "outlier_flag" in view.columns:
             view = view.sort_values("outlier_flag", ascending=False)
     elif sort_mode.startswith("Hidden") and "hidden_signal_score" in view.columns:
-        view = view.sort_values(["hidden_signal_score", "risk_score"], ascending=[False, False]) if "risk_score" in view.columns else view.sort_values("hidden_signal_score", ascending=False)
+        view = (
+            view.sort_values(["hidden_signal_score", "risk_score"], ascending=[False, False])
+            if "risk_score" in view.columns
+            else view.sort_values("hidden_signal_score", ascending=False)
+        )
     elif sort_mode.startswith("PPP Total") and "ppp_current_total" in view.columns:
         view = view.sort_values("ppp_current_total", ascending=False)
     elif sort_mode.startswith("PPP Per Capita") and "ppp_per_capita" in view.columns:
@@ -209,9 +197,6 @@ def render_mission_control_page(con: duckdb.DuckDBPyConnection) -> None:
 
     st.markdown("---")
 
-    # -----------------------------------------------------------------
-    # Selection + KPI strip
-    # -----------------------------------------------------------------
     st.markdown("### County Focus")
 
     labels = view["label"].tolist() if "label" in view.columns else []
@@ -247,129 +232,40 @@ def render_mission_control_page(con: duckdb.DuckDBPyConnection) -> None:
     k4.metric("Hidden Signal", f"{float(row.get('hidden_signal_score', 0.0)):.2f}" if "hidden_signal_score" in view.columns else "—")
     k5.metric("PPP Total", _fmt_money(row.get("ppp_current_total", 0.0)) if "ppp_current_total" in view.columns else "—")
 
-    demo_cols_present = any(c in view.columns for c in ["Total_Pop", "Poverty_Rate", "Unemployment_Rate"])
-    if demo_cols_present:
-        d1, d2, d3 = st.columns(3)
-        d1.metric("Population", _fmt_num(row.get("Total_Pop", None)))
-        d2.metric("Poverty", _fmt_pct(row.get("Poverty_Rate", None)))
-        d3.metric("Unemployment", _fmt_pct(row.get("Unemployment_Rate", None)))
+    st.markdown("### County Table")
 
-    if use_peer_norm:
-        # Peer explanation if present
-        peer_group = row.get("peer_group", None)
-        peer_basis = row.get("outlier_basis", "PEER")
-        peer_z = row.get("ppp_peer_z", None)
-        with st.expander("Peer normalization details", expanded=False):
-            st.write(f"Outlier basis: **{peer_basis}**")
-            if peer_group is not None:
-                st.write(f"Peer group: `{peer_group}`")
-            if peer_z is not None:
-                try:
-                    st.write(f"Peer z-score (PPP per capita): **{float(peer_z):.2f}**")
-                except Exception:
-                    st.write(f"Peer z-score (PPP per capita): `{peer_z}`")
-
-    st.markdown("---")
-
-    # -----------------------------------------------------------------
-    # Navigation actions (routing hub)
-    # -----------------------------------------------------------------
-    st.markdown("### Actions")
-    a1, a2, a3, a4 = st.columns(4)
-
-    with a1:
-        if st.button("Open County Profile"):
-            st.session_state["vf_nav_target"] = "County Profile"
-            st.rerun()
-
-    with a2:
-        if st.button("Compare Counties"):
-            st.session_state["vf_compare_seed"] = selected_geoid
-            st.session_state["vf_nav_target"] = "Compare Counties"
-            st.rerun()
-
-    with a3:
-        if st.button("Open Lender Network"):
-            st.session_state["vf_nav_target"] = "Lender Network"
-            st.rerun()
-
-    with a4:
-        if st.button("Fraud Simulator"):
-            st.session_state["vf_nav_target"] = "Fraud Simulator"
-            st.rerun()
-
-    st.markdown("---")
-
-    # -----------------------------------------------------------------
-    # Triage Table
-    # -----------------------------------------------------------------
-    st.markdown("### Triage Table")
-
-    cols = [
-        "NAME",
-        "STUSPS",
-        "GEOID",
+    # Human-friendly presentation frame
+    show_cols = []
+    for c in [
+        "label",
         "risk_score",
         "risk_tier",
         "outlier_tier",
         "outlier_score",
-        "outlier_basis",
         "hidden_signal_score",
-        "ppp_current_total",
-        "ppp_per_capita",
         "ppp_loan_count",
-    ]
+        "ppp_per_capita",
+        "ppp_current_total",
+        "Poverty_Rate",
+        "Unemployment_Rate",
+        "Total_Pop",
+    ]:
+        if c in view.columns:
+            show_cols.append(c)
 
-    # peer-specific
-    for c in ["peer_group", "ppp_peer_z", "ppp_global_z", "outlier_flag"]:
-        if c in view.columns and c not in cols:
-            cols.append(c)
+    table = view[show_cols].copy()
 
-    # demographics if present
-    for c in ["Total_Pop", "Poverty_Rate", "Unemployment_Rate"]:
-        if c in view.columns and c not in cols:
-            cols.append(c)
+    if "ppp_current_total" in table.columns:
+        table["ppp_current_total"] = table["ppp_current_total"].apply(_fmt_money)
+    if "ppp_loan_count" in table.columns:
+        table["ppp_loan_count"] = table["ppp_loan_count"].apply(_fmt_num)
+    if "Total_Pop" in table.columns:
+        table["Total_Pop"] = table["Total_Pop"].apply(_fmt_num)
+    if "ppp_per_capita" in table.columns:
+        table["ppp_per_capita"] = table["ppp_per_capita"].apply(_fmt_money)
+    if "Poverty_Rate" in table.columns:
+        table["Poverty_Rate"] = table["Poverty_Rate"].apply(_fmt_pct)
+    if "Unemployment_Rate" in table.columns:
+        table["Unemployment_Rate"] = table["Unemployment_Rate"].apply(_fmt_pct)
 
-    cols = [c for c in cols if c in view.columns]
-
-    triage = view[cols].copy()
-    triage.rename(
-        columns={
-            "NAME": "County",
-            "STUSPS": "State",
-            "ppp_current_total": "PPP Total",
-            "ppp_per_capita": "PPP / Capita",
-            "ppp_loan_count": "PPP Loans",
-            "Total_Pop": "Population",
-            "Poverty_Rate": "Poverty",
-            "Unemployment_Rate": "Unemployment",
-            "hidden_signal_score": "Hidden Signal",
-            "ppp_peer_z": "Peer Z (PPP/Cap)",
-            "ppp_global_z": "Global Z (PPP/Cap)",
-            "outlier_flag": "Outlier Flag",
-        },
-        inplace=True,
-    )
-
-    st.dataframe(triage, width='stretch')
-
-    st.download_button(
-        "Download triage table (CSV)",
-        data=triage.to_csv(index=False),
-        file_name="mission_control_triage.csv",
-        mime="text/csv",
-    )
-
-    with st.expander("How to interpret Outlier Tier"):
-        st.markdown(
-            """
-**Outlier Tier** is intended for triage and is explainable:
-
-- **GLOBAL** basis: county compared against all counties nationwide.
-- **PEER** basis: county compared only against demographic peers
-  (population, poverty rate, unemployment rate buckets).
-
-Peer normalization reduces false positives where large metro counties
-are compared to rural counties.
-            """.strip()
-        )
+    st.dataframe(table, use_container_width=True)

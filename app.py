@@ -14,6 +14,14 @@ from ui.compare_counties import render_compare_counties_page
 from ui.fraud_simulator import render_fraud_simulator_page
 from map.deck import render_nationwide_map
 
+# Optional Dashboard page (some deployments referenced this)
+try:
+    from ui.dashboard import render_dashboard_page  # type: ignore
+    HAS_DASHBOARD = True
+except Exception:
+    render_dashboard_page = None  # type: ignore
+    HAS_DASHBOARD = False
+
 try:
     from health.panel import render_health_panel
     HAS_HEALTH_PANEL = True
@@ -32,16 +40,7 @@ def _is_streamlit_cloud() -> bool:
 
 
 def _table_exists(con: duckdb.DuckDBPyConnection, table: str, schema: str | None = None) -> bool:
-    """Return True if a table exists.
-
-    If schema is provided (e.g., 'analytics' or 'core'), the check is restricted
-    to that schema.
-
-    Parameters
-    ----------
-    table : table name without schema
-    schema: optional schema name
-    """
+    """Return True if a table/view exists (case-insensitive)."""
     if schema:
         q = """
         SELECT COUNT(*)
@@ -68,52 +67,63 @@ def get_connection(read_only: bool = False) -> duckdb.DuckDBPyConnection:
     mono, core, analytics = _db_paths()
     mono.parent.mkdir(parents=True, exist_ok=True)
 
-    def _enable_schema_compat(c: duckdb.DuckDBPyConnection) -> None:
-        """Make schema resolution deterministic in both local + Streamlit Cloud.
-
-        The monolithic v_finder.duckdb stores tables under schemas (analytics/core).
-        Many UI modules still reference unqualified names (e.g., county_scores).
-        We enforce a search_path AND create compatibility views in main.
-        """
-        try:
-            c.execute("SET search_path TO analytics, core, main;")
-        except Exception:
-            pass
-
-        # Create main-schema compatibility views (best-effort; never fail startup)
-        view_map = {
-            "county_scores": "analytics.county_scores",
-            "county_agg": "analytics.county_agg",
-            "county_lender_signals": "analytics.county_lender_signals",
-            "lender_profiles": "analytics.lender_profiles",
-            "acs_county": "core.acs_county",
-            "county_ref": "core.county_ref",
-        }
-        for v, target in view_map.items():
-            try:
-                c.execute(f"CREATE OR REPLACE VIEW {v} AS SELECT * FROM {target}")
-            except Exception:
-                # Target may not exist in some dev shells; ignore.
-                continue
-
     if mono.exists():
         con = duckdb.connect(str(mono), read_only=read_only)
-        # If split DBs also exist, prefer them for speed/clarity
+        # If split DBs also exist, attach them (hybrid compatible)
         if core.exists():
             con.execute(f"ATTACH '{core.as_posix()}' AS core")
         if analytics.exists():
             con.execute(f"ATTACH '{analytics.as_posix()}' AS analytics")
-        _enable_schema_compat(con)
         return con
 
-    # No monolithic DB: create an in-memory shell and attach available DBs
+    # No monolithic DB: create in-memory shell and attach available DBs
     con = duckdb.connect(":memory:")
     if core.exists():
         con.execute(f"ATTACH '{core.as_posix()}' AS core")
     if analytics.exists():
         con.execute(f"ATTACH '{analytics.as_posix()}' AS analytics")
-    _enable_schema_compat(con)
     return con
+
+
+def _ensure_compat_views(con: duckdb.DuckDBPyConnection) -> None:
+    """Create main-level compatibility views so unqualified queries work in Local + Cloud.
+
+    Does NOT change schemas or tables. Views only.
+    This prevents failures like:
+      - Table county_scores does not exist (but analytics.county_scores does)
+      - Table county_ref does not exist (but core.county_ref does)
+    """
+    # Candidate mappings (target view -> (schema, table) preference order)
+    mapping = {
+        "county_scores": [("analytics", "county_scores"), ("main", "county_scores")],
+        "county_agg": [("analytics", "county_agg"), ("main", "county_agg")],
+        "county_lender_signals": [("analytics", "county_lender_signals"), ("main", "county_lender_signals")],
+        "lender_profiles": [("analytics", "lender_profiles"), ("main", "lender_profiles")],
+        "acs_county": [("analytics", "acs_county"), ("core", "acs_county"), ("main", "acs_county")],
+        "county_ref": [("core", "county_ref"), ("analytics", "county_ref"), ("main", "county_ref")],
+    }
+
+    # If view already exists in main, do nothing
+    for view_name, candidates in mapping.items():
+        if _table_exists(con, view_name, schema="main"):
+            continue
+
+        # Find first existing candidate
+        src = None
+        for sch, tbl in candidates:
+            if _table_exists(con, tbl, schema=sch):
+                src = (sch, tbl)
+                break
+
+        if not src:
+            continue
+
+        sch, tbl = src
+        try:
+            con.execute(f"CREATE VIEW {view_name} AS SELECT * FROM {sch}.{tbl}")
+        except Exception:
+            # If view creation fails for any reason, continue without breaking app launch.
+            pass
 
 
 def _attach_ppp_shard_for_state(con: duckdb.DuckDBPyConnection, state: str) -> Tuple[bool, str]:
@@ -144,7 +154,6 @@ def _render_status_badge(con: duckdb.DuckDBPyConnection) -> None:
     cloud = _is_streamlit_cloud()
     mode = "Cloud" if cloud else "Local"
 
-    # Determine if we are split or monolithic
     mono, core, analytics = _db_paths()
     split = (core.exists() or analytics.exists()) and not mono.exists()
     layout = "Split DB" if split else "Monolithic DB"
@@ -168,14 +177,13 @@ def _init_state() -> None:
 
 
 def _available_states(con: duckdb.DuckDBPyConnection) -> list[str]:
-    # Prefer analytics.county_scores if attached, else main.county_scores
-    for schema in ("analytics", "main"):
-        try:
-            if _table_exists(con, 'county_scores', schema=schema):
-                df = con.execute(f"SELECT DISTINCT STUSPS FROM {schema}.county_scores ORDER BY STUSPS").fetchdf()
-                return [str(x) for x in df["STUSPS"].dropna().tolist()]
-        except Exception:
-            continue
+    # After compat views, county_scores should exist unqualified if present anywhere
+    try:
+        if _table_exists(con, "county_scores"):
+            df = con.execute("SELECT DISTINCT STUSPS FROM county_scores ORDER BY STUSPS").fetchdf()
+            return [str(x) for x in df["STUSPS"].dropna().tolist()]
+    except Exception:
+        pass
     return []
 
 
@@ -195,14 +203,20 @@ def _sidebar_nav(con: duckdb.DuckDBPyConnection) -> str:
             help="Used for default fast views and optional PPP shard attachment.",
         )
     else:
-        st.session_state["vf_state"] = st.sidebar.text_input("Active state (2-letter)", value=st.session_state.get("vf_state", ""))
+        st.session_state["vf_state"] = st.sidebar.text_input(
+            "Active state (2-letter)",
+            value=st.session_state.get("vf_state", ""),
+        )
 
     st.session_state["vf_ppp_auto_attach"] = st.sidebar.checkbox(
         "Auto-attach PPP shard (if present)",
         value=bool(st.session_state.get("vf_ppp_auto_attach", True)),
     )
 
-    pages = [
+    pages = []
+    if HAS_DASHBOARD:
+        pages.append("Dashboard")
+    pages += [
         "Mission Control",
         "Nationwide Map",
         "County Profile",
@@ -223,6 +237,9 @@ def main() -> None:
 
     con = get_connection(read_only=False)
     try:
+        # Ensure unqualified queries work regardless of split/mono schema layout
+        _ensure_compat_views(con)
+
         page = _sidebar_nav(con)
 
         # PPP shard attach (optional)
@@ -234,7 +251,9 @@ def main() -> None:
 
         _render_status_badge(con)
 
-        if page == "Mission Control":
+        if page == "Dashboard" and HAS_DASHBOARD:
+            render_dashboard_page(con)  # type: ignore[misc]
+        elif page == "Mission Control":
             render_mission_control_page(con)
         elif page == "Nationwide Map":
             render_nationwide_map(con, default_state=st.session_state.get("vf_state", ""))
