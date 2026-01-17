@@ -1,167 +1,123 @@
-"""
-ui/outliers.py — v9 ULTRA (FINAL)
-
-Adds PEER NORMALIZATION to county anomaly detection.
-Peer groups are built from demographic similarity, not geography.
-
-Peer dimensions:
-- Population
-- Poverty rate
-- Unemployment rate
-"""
+from __future__ import annotations
 
 import duckdb
 import pandas as pd
-import numpy as np
+import streamlit as st
 
 
-# =====================================================================
-# Utilities
-# =====================================================================
+# -----------------------------------------------------------------------------
+# Base loaders
+# -----------------------------------------------------------------------------
 
-def table_exists(con, name: str) -> bool:
-    try:
-        return bool(
-            con.execute(
-                "SELECT COUNT(*) FROM information_schema.tables WHERE table_name = ?",
-                [name.lower()],
-            ).fetchone()[0]
-        )
-    except Exception:
-        return False
-
-
-def zscore(series: pd.Series) -> pd.Series:
-    s = pd.to_numeric(series, errors="coerce")
-    mu = s.mean(skipna=True)
-    sd = s.std(skipna=True, ddof=0)
-    if sd <= 1e-9 or pd.isna(sd):
-        return pd.Series(np.zeros(len(series)), index=series.index)
-    return (s - mu) / sd
-
-
-# =====================================================================
-# Load base data
-# =====================================================================
-
-def load_county_scores(con) -> pd.DataFrame:
+def load_county_scores(con: duckdb.DuckDBPyConnection) -> pd.DataFrame:
+    """
+    Load county-level risk scores.
+    MUST be schema-qualified for Cloud reliability.
+    """
     sql = """
-        SELECT
-            GEOID,
-            STUSPS,
-            NAME,
-            Total_Pop,
-            Poverty_Rate,
-            Unemployment_Rate,
-            ppp_loan_count,
-            ppp_current_total,
-            ppp_per_capita,
-            risk_score,
-            risk_tier,
-            hidden_signal_score
-        FROM county_scores
+    SELECT
+        GEOID,
+        risk_score,
+        risk_tier,
+        peer_norm_score,
+        peer_rank,
+        z_risk_score
+    FROM analytics.county_scores
     """
     return con.execute(sql).fetchdf()
 
 
-# =====================================================================
-# Peer grouping
-# =====================================================================
-
-def assign_peer_group(df: pd.DataFrame) -> pd.DataFrame:
+def load_county_ref(con: duckdb.DuckDBPyConnection) -> pd.DataFrame:
     """
-    Assign demographic peer buckets.
+    Load county reference table.
     """
-
-    df = df.copy()
-
-    # Log population for scale stability
-    df["log_pop"] = np.log10(df["Total_Pop"].clip(lower=1))
-
-    df["peer_pop"] = pd.qcut(df["log_pop"], 4, labels=False, duplicates="drop")
-    df["peer_poverty"] = pd.qcut(df["Poverty_Rate"], 3, labels=False, duplicates="drop")
-    df["peer_unemp"] = pd.qcut(df["Unemployment_Rate"], 3, labels=False, duplicates="drop")
-
-    df["peer_group"] = (
-        df["peer_pop"].astype(str)
-        + "-"
-        + df["peer_poverty"].astype(str)
-        + "-"
-        + df["peer_unemp"].astype(str)
-    )
-
-    return df
-
-
-# =====================================================================
-# Peer-normalized anomaly detection
-# =====================================================================
-
-def peer_normalized_flags(df: pd.DataFrame) -> pd.DataFrame:
+    sql = """
+    SELECT
+        GEOID,
+        NAME,
+        STUSPS,
+        lat,
+        lon
+    FROM core.county_ref
     """
-    Compute anomaly flags *within peer groups*.
+    return con.execute(sql).fetchdf()
+
+
+# -----------------------------------------------------------------------------
+# Outliers logic
+# -----------------------------------------------------------------------------
+
+def load_outliers(
+    con: duckdb.DuckDBPyConnection,
+    use_peer_norm: bool = True,
+    top_n: int = 50,
+) -> pd.DataFrame:
+    """
+    Build outlier frame for Mission Control.
+
+    PPP is OPTIONAL.
+    This function must work with analytics-only DBs.
     """
 
-    df = df.copy()
-    df["ppp_peer_z"] = 0.0
-    df["peer_outlier_flag"] = False
-
-    for peer, g in df.groupby("peer_group"):
-        if len(g) < 10:
-            continue  # insufficient peers
-
-        z = zscore(g["ppp_per_capita"])
-        df.loc[g.index, "ppp_peer_z"] = z
-        df.loc[g.index, "peer_outlier_flag"] = z.abs() >= 2.5
-
-    return df
-
-
-# =====================================================================
-# Global anomaly detection (legacy)
-# =====================================================================
-
-def global_flags(df: pd.DataFrame) -> pd.DataFrame:
-    df = df.copy()
-    df["ppp_global_z"] = zscore(df["ppp_per_capita"])
-    df["global_outlier_flag"] = df["ppp_global_z"].abs() >= 2.5
-    return df
-
-
-# =====================================================================
-# Composite model
-# =====================================================================
-
-def build_outliers(df: pd.DataFrame, use_peer_norm: bool = True) -> pd.DataFrame:
-    df = assign_peer_group(df)
-    df = global_flags(df)
-
-    if use_peer_norm:
-        df = peer_normalized_flags(df)
-        df["outlier_flag"] = df["peer_outlier_flag"]
-        df["outlier_basis"] = "PEER"
-    else:
-        df["outlier_flag"] = df["global_outlier_flag"]
-        df["outlier_basis"] = "GLOBAL"
-
-    df["outlier_tier"] = df["outlier_flag"].map(
-        {True: "SEVERE", False: "NORMAL"}
-    )
-
-    return df
-
-
-# =====================================================================
-# Public API
-# =====================================================================
-
-def load_outliers(con, use_peer_norm: bool = True) -> pd.DataFrame:
-    if not table_exists(con, "county_scores"):
+    # --- Load required analytics tables ---
+    try:
+        df_scores = load_county_scores(con)
+        df_ref = load_county_ref(con)
+    except Exception as e:
+        st.error(f"Failed to load analytics tables: {e}")
         return pd.DataFrame()
 
-    df = load_county_scores(con)
-    if df.empty:
-        return df
+    if df_scores.empty or df_ref.empty:
+        return pd.DataFrame()
 
-    df = build_outliers(df, use_peer_norm=use_peer_norm)
-    return df
+    # --- Merge scores with county metadata ---
+    df = df_scores.merge(df_ref, on="GEOID", how="left")
+
+    # --- Select scoring column ---
+    score_col = "peer_norm_score" if use_peer_norm and "peer_norm_score" in df.columns else "risk_score"
+
+    df = df[df[score_col].notna()].copy()
+
+    # --- Sort descending risk ---
+    df = df.sort_values(score_col, ascending=False)
+
+    # --- Trim ---
+    if top_n:
+        df = df.head(top_n)
+
+    return df.reset_index(drop=True)
+
+
+# -----------------------------------------------------------------------------
+# Render helper (used by Mission Control)
+# -----------------------------------------------------------------------------
+
+def render_outliers_table(
+    con: duckdb.DuckDBPyConnection,
+    use_peer_norm: bool = True,
+):
+    """
+    Render the Outliers table in the UI.
+    """
+    df = load_outliers(con, use_peer_norm=use_peer_norm)
+
+    if df.empty:
+        st.info("No outlier counties available.")
+        return
+
+    display_cols = [
+        "NAME",
+        "STUSPS",
+        "risk_score",
+        "risk_tier",
+        "peer_norm_score",
+        "peer_rank",
+    ]
+
+    display_cols = [c for c in display_cols if c in df.columns]
+
+    st.dataframe(
+        df[display_cols],
+        width="stretch",
+        hide_index=True,
+    )
