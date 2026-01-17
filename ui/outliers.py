@@ -12,16 +12,16 @@ import streamlit as st
 def load_county_scores(con: duckdb.DuckDBPyConnection) -> pd.DataFrame:
     """
     Load county-level risk scores.
-    MUST be schema-qualified for Cloud reliability.
+    Schema-qualified and aligned with V1 schema.
     """
     sql = """
     SELECT
         GEOID,
         risk_score,
-        risk_tier,
-        peer_norm_score,
-        peer_rank,
-        z_risk_score
+        hidden_signal_score,
+        loans_per_1k,
+        ppp_loan_count,
+        ppp_current_total
     FROM analytics.county_scores
     """
     return con.execute(sql).fetchdf()
@@ -49,14 +49,16 @@ def load_county_ref(con: duckdb.DuckDBPyConnection) -> pd.DataFrame:
 
 def load_outliers(
     con: duckdb.DuckDBPyConnection,
-    use_peer_norm: bool = True,
+    use_peer_norm: bool = False,
     top_n: int = 50,
 ) -> pd.DataFrame:
     """
     Build outlier frame for Mission Control.
 
-    PPP is OPTIONAL.
-    This function must work with analytics-only DBs.
+    V1 behavior:
+    - risk_score is the primary ranking metric
+    - hidden_signal_score is auxiliary
+    - PPP metrics are already aggregated
     """
 
     # --- Load required analytics tables ---
@@ -73,8 +75,8 @@ def load_outliers(
     # --- Merge scores with county metadata ---
     df = df_scores.merge(df_ref, on="GEOID", how="left")
 
-    # --- Select scoring column ---
-    score_col = "peer_norm_score" if use_peer_norm and "peer_norm_score" in df.columns else "risk_score"
+    # --- Select ranking column (V1: always risk_score) ---
+    score_col = "risk_score"
 
     df = df[df[score_col].notna()].copy()
 
@@ -94,7 +96,7 @@ def load_outliers(
 
 def render_outliers_table(
     con: duckdb.DuckDBPyConnection,
-    use_peer_norm: bool = True,
+    use_peer_norm: bool = False,
 ):
     """
     Render the Outliers table in the UI.
@@ -109,9 +111,10 @@ def render_outliers_table(
         "NAME",
         "STUSPS",
         "risk_score",
-        "risk_tier",
-        "peer_norm_score",
-        "peer_rank",
+        "hidden_signal_score",
+        "loans_per_1k",
+        "ppp_loan_count",
+        "ppp_current_total",
     ]
 
     display_cols = [c for c in display_cols if c in df.columns]
