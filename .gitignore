@@ -22,3 +22,9 @@ __pycache__/
 # OS
 .DS_Store
 Thumbs.db
+
+# Local PPP / Capella tools and artifacts
+cbimport.py
+db_audit_v1.py
+export_ppp_for_capella.py
+ppp_clean.jsonl
